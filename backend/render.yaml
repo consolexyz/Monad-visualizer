@@ -2,7 +2,20 @@ services:
   - type: web
     name: monad-visualizer-backend
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      # Install Rust
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      source ~/.cargo/env
+      export PATH="$HOME/.cargo/bin:$PATH"
+      
+      # Set Cargo permissions
+      export CARGO_HOME=/tmp/cargo
+      export RUSTUP_HOME=/tmp/rustup
+      
+      # Upgrade pip and install packages
+      pip install --upgrade pip setuptools wheel
+      pip install setuptools-rust
+      pip install -r requirements.txt
     startCommand: gunicorn --bind 0.0.0.0:$PORT server:app
     envVars:
       - key: HYPERSYNC_BEARER_TOKEN
