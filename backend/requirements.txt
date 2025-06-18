@@ -1,16 +1,5 @@
-# Core web framework
 Flask==3.0.0
 Flask-CORS==4.0.0
 gunicorn==21.2.0
-
-# Environment utilities
 python-dotenv==1.0.0
-
-# Rust build tools (needed for hypersync)
-setuptools-rust>=1.5.0
-
-# Blockchain data client
-hypersync>=0.8.5
-
-# Async support (if needed)
-asyncio==3.4.3
+hypersync==0.8.5
