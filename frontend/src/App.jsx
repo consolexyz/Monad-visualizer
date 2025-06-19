@@ -564,8 +564,8 @@ function App() {
   const formatHash = (hash) => `${hash?.slice(0, 6)}...${hash?.slice(-4)}`;
   const formatAddress = (addr) => `${addr?.slice(0, 6)}...${addr?.slice(-4)}`;
   const formatValue = (value) => {
-    const eth = parseFloat(value) / 1e18;
-    return eth < 0.01 ? `${eth.toExponential(2)} ETH` : `${eth.toFixed(4)} ETH`;
+    const mon = parseFloat(value) / 1e18;
+    return mon < 0.01 ? `${mon.toExponential(2)} MON` : `${mon.toFixed(4)} MON`;
   };
 
   const getTransactionType = (tx) => {
