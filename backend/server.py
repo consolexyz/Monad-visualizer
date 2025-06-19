@@ -42,13 +42,21 @@ client = hypersync.HypersyncClient(client_config)
 
 # Helper function to run async code in a synchronous context
 def run_async(coroutine):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        result = loop.run_until_complete(coroutine)
-        return result
-    finally:
-        loop.close()
+        # Check if there's already a running loop
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If there's already a running loop, we can't use run_until_complete
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, coroutine)
+                return future.result()
+        else:
+            # No running loop, safe to use run_until_complete
+            return loop.run_until_complete(coroutine)
+    except RuntimeError:
+        # No event loop in current thread, create a new one
+        return asyncio.run(coroutine)
 
 # In newer Flask versions, we need to initialize as part of app context
 def initialize_client():
@@ -56,8 +64,9 @@ def initialize_client():
     try:
         print("HypersyncClient initialized.")
         
-        # Populate initial cache
-        run_async(update_transaction_cache())
+        # Don't populate initial cache automatically to avoid async issues
+        # run_async(update_transaction_cache())
+        print("Skipping initial cache population to avoid async conflicts")
     except Exception as e:
         print(f"Error initializing HypersyncClient: {e}")
 

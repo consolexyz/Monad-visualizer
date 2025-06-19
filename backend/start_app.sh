@@ -17,7 +17,7 @@ pip install -r requirements.txt
 
 # Start the backend API server in the background
 echo "Starting backend API server..."
-python api_server.py &
+source venv/bin/activate && python server.py &
 BACKEND_PID=$!
 
 # Change to frontend directory

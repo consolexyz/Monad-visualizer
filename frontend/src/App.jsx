@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
-import './App.css';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Activity, TrendingUp, Users, Clock, Search, RefreshCw, Zap, Database, Network } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -7,8 +11,6 @@ function App() {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [nextBlock, setNextBlock] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [lastProcessedBlock, setLastProcessedBlock] = useState(0);
   const [metrics, setMetrics] = useState({
@@ -67,8 +69,6 @@ function App() {
 
       if (result.status === 'success' && result.data) {
         setTransactions(prev => fromBlock === 0 ? result.data.transactions : [...prev, ...result.data.transactions]);
-        setNextBlock(result.data.pagination.nextBlock);
-        setHasMore(result.data.pagination.hasMore);
         setLastUpdated(new Date());
 
         // Set the initial last processed block
@@ -118,13 +118,13 @@ function App() {
     }
   }
 
-  // Function to search transactions by address
+  // Function to search for address transactions
   async function searchByAddress() {
-    if (!searchAddress) return;
+    if (!searchAddress.trim()) return;
 
     try {
       const response = await fetch(`${API_URL}/api/transactions/by-address/${searchAddress}?limit=20`);
-      if (!response.ok) throw new Error('Failed to search transactions');
+      if (!response.ok) throw new Error('Failed to fetch address transactions');
 
       const result = await response.json();
 
@@ -132,310 +132,399 @@ function App() {
         setAddressTransactions(result.data.transactions);
       }
     } catch (err) {
-      console.error('Error searching transactions:', err);
+      console.error('Error searching address:', err);
     }
   }
 
+  // Initialize and set up polling
   useEffect(() => {
-    // Initial fetch of transactions and metrics
     fetchTransactions();
     fetchMetrics();
     fetchRecentBlocks();
 
-    // Set up more frequent polling for TPS updates
-    const newTxInterval = setInterval(() => {
-      fetchNewTransactions();
-    }, 1000); // Check for new transactions every 1 second for more real-time TPS
-
-    // Set up polling for metrics (more frequent for real-time TPS)
-    const metricsInterval = setInterval(() => {
-      fetchMetrics();
-      fetchRecentBlocks();
-    }, 3000); // Update metrics every 3 seconds for better real-time feel
+    const metricsInterval = setInterval(fetchMetrics, 10000);
+    const transactionInterval = setInterval(fetchNewTransactions, 3000);
+    const blocksInterval = setInterval(fetchRecentBlocks, 15000);
 
     return () => {
-      clearInterval(newTxInterval);
       clearInterval(metricsInterval);
+      clearInterval(transactionInterval);
+      clearInterval(blocksInterval);
     };
   }, []);
 
-  const loadMore = () => {
-    if (hasMore) {
-      fetchTransactions(nextBlock);
+  const formatHash = (hash) => `${hash?.slice(0, 6)}...${hash?.slice(-4)}`;
+  const formatAddress = (addr) => `${addr?.slice(0, 6)}...${addr?.slice(-4)}`;
+  const formatValue = (value) => {
+    const eth = parseFloat(value) / 1e18;
+    return eth < 0.01 ? `${eth.toExponential(2)} ETH` : `${eth.toFixed(4)} ETH`;
+  };
+
+  const getActivityBadgeVariant = (activity) => {
+    switch (activity) {
+      case 'High': return 'default';
+      case 'Medium': return 'secondary';
+      default: return 'outline';
     }
   };
 
-  const formatAddress = (address) => {
-    if (!address) return 'N/A';
-    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
-  };
-
-  const formatValue = (value) => {
-    const num = Number(value) / 1e18; // Convert from wei to ETH
-    return num.toFixed(6) + ' MON';
-  };
-
-  // Generate random position and color for each transaction (within section bounds)
-  const generateDotStyle = (tx, index) => {
-    // Use transaction hash to generate consistent random values
-    const hash = tx.hash;
-    const hashInt = parseInt(hash.substring(2, 10), 16);
-
-    // Generate random position within the dots section (not full screen)
-    const x = (hashInt % 90) + 5; // 5% to 95% within the container
-    const y = ((hashInt * 7) % 85) + 5; // 5% to 90% within the container
-
-    // Generate different colors based on transaction properties
-    const colors = [
-      '#3b82f6', // Blue
-      '#10b981', // Green
-      '#f59e0b', // Orange
-      '#ef4444', // Red
-      '#8b5cf6', // Purple
-      '#06b6d4', // Cyan
-      '#f97316', // Orange
-      '#84cc16', // Lime
-      '#ec4899', // Pink
-      '#6366f1', // Indigo
-    ];
-
-    const colorIndex = (parseInt(hash.substring(10, 12), 16)) % colors.length;
-    const color = colors[colorIndex];
-
-    // Different sizes based on transaction value
-    const value = parseFloat(tx.value) || 0;
-    const size = Math.min(Math.max(8 + (value / 1e18) * 10, 8), 25); // 8px to 25px
-
-    return {
-      position: 'absolute', // Changed from 'fixed' to 'absolute'
-      left: `${x}%`,
-      top: `${y}%`,
-      backgroundColor: color,
-      width: `${size}px`,
-      height: `${size}px`,
-      zIndex: 100 + index, // Newer transactions on top
-      animationDelay: `${index * 0.1}s`
-    };
+  const getActivityColor = (activity) => {
+    switch (activity) {
+      case 'High': return 'text-green-600';
+      case 'Medium': return 'text-yellow-600';
+      default: return 'text-gray-600';
+    }
   };
 
   return (
-    <div className="App">
-      <header>
-        <h1>Monad Testnet Explorer</h1>
-        <p>Transactions from the Monad testnet - {transactions.length} live dots</p>
-        {lastUpdated && (
-          <p className="last-updated">
-            Last updated: {lastUpdated.toLocaleTimeString()}
+    <div className="min-h-screen bg-background">
+      <div className="container mx-auto p-6 space-y-8">
+        {/* Header */}
+        <div className="text-center space-y-2">
+          <div className="flex items-center justify-center gap-3 mb-4">
+            <div className="p-2 bg-primary/10 rounded-lg">
+              <Network className="h-8 w-8 text-primary" />
+            </div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-blue-600 bg-clip-text text-transparent">
+              Monad Visualizer
+            </h1>
+          </div>
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+            Real-time blockchain explorer for Monad testnet - Monitor transactions, blocks, and network performance
           </p>
-        )}
-      </header>
-
-      {/* Enhanced Blockchain Metrics Section */}
-      <div className="metrics-section">
-        <h2>Real-Time Network Analytics</h2>
-
-        {/* TPS Dashboard */}
-        <div className="tps-dashboard">
-          <div className="tps-main-card">
-            <div className="tps-main-value">{metrics.tps}</div>
-            <div className="tps-main-label">TPS</div>
-            <div className="tps-activity-badge" data-activity={metrics.network_activity?.toLowerCase()}>
-              {metrics.network_activity} Activity
-            </div>
-            <div className="tps-breakdown">
-              <div className="tps-timeframe">
-                <span className="tps-period">10s</span>
-                <span className="tps-value">{metrics.tps_10s}</span>
-              </div>
-              <div className="tps-timeframe">
-                <span className="tps-period">30s</span>
-                <span className="tps-value">{metrics.tps_30s}</span>
-              </div>
-              <div className="tps-timeframe">
-                <span className="tps-period">60s</span>
-                <span className="tps-value">{metrics.tps_60s}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="metrics-grid">
-          <div className="metric-card enhanced">
-            <div className="metric-icon">📊</div>
-            <div className="metric-value">{metrics.block_height.toLocaleString()}</div>
-            <div className="metric-label">Block Height</div>
-            <div className="metric-description">Current block number</div>
-            <div className="metric-trend">+{metrics.blocks_per_minute.toFixed(1)}/min</div>
-          </div>
-          <div className="metric-card enhanced">
-            <div className="metric-icon">⏱️</div>
-            <div className="metric-value">{metrics.avg_block_time}s</div>
-            <div className="metric-label">Block Time</div>
-            <div className="metric-description">Average time between blocks</div>
-            <div className="metric-trend">
-              {metrics.avg_block_time < 2 ? '🟢 Fast' : metrics.avg_block_time < 5 ? '🟡 Normal' : '🔴 Slow'}
-            </div>
-          </div>
-          <div className="metric-card enhanced">
-            <div className="metric-icon">🔗</div>
-            <div className="metric-value">{metrics.validators}</div>
-            <div className="metric-label">Validators</div>
-            <div className="metric-description">Active network validators</div>
-            <div className="metric-trend">🟢 Healthy</div>
-          </div>
-          <div className="metric-card enhanced">
-            <div className="metric-icon">📈</div>
-            <div className="metric-value">{metrics.blocks_per_minute.toFixed(1)}</div>
-            <div className="metric-label">Blocks/Min</div>
-            <div className="metric-description">Block production rate</div>
-            <div className="metric-trend">Real-time</div>
-          </div>
-        </div>
-      </div>
-
-      {error && (
-        <div className="error-banner">
-          <p>Error: {error}</p>
-          <button onClick={() => fetchTransactions()}>Try Again</button>
-        </div>
-      )}
-
-      {/* Dedicated Transaction Dots Section */}
-      <div className="transaction-dots-section">
-        <h2>Live Transaction Visualization</h2>
-        <div className="dots-info">
-          <span className="dots-count">{transactions.length} Active Transactions</span>
-          <span className="dots-legend">
-            Each dot = 1 transaction • Size = Value • Color = Hash-based
-          </span>
-        </div>
-        <div className="dots-container">
-          {transactions.map((tx, index) => (
-            <div
-              key={tx.hash}
-              className={`section-transaction-dot ${index === 0 ? 'new-transaction' : ''}`}
-              style={generateDotStyle(tx, index)}
-              title={`Hash: ${tx.hash.substring(0, 10)}...\nValue: ${formatValue(tx.value)}\nBlock: ${tx.blockNumber}\nFrom: ${formatAddress(tx.from)}\nTo: ${formatAddress(tx.to)}`}
-            />
-          ))}
-          {transactions.length === 0 && (
-            <div className="waiting-message">
-              <div className="waiting-spinner"></div>
-              <p>Waiting for transactions...</p>
+          {lastUpdated && (
+            <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+              Last updated: {lastUpdated.toLocaleTimeString()}
             </div>
           )}
         </div>
-      </div>
 
-      {/* Address Search Section */}
-      <div className="search-section">
-        <h2>Transaction Search</h2>
-        <div className="search-box">
-          <input
-            type="text"
-            placeholder="Enter address (0x...)"
-            value={searchAddress}
-            onChange={(e) => setSearchAddress(e.target.value)}
-            className="address-input"
-          />
-          <button onClick={searchByAddress} className="search-button">
-            Search Transactions
-          </button>
-        </div>
-
-        {addressTransactions.length > 0 && (
-          <div className="search-results">
-            <h3>Transactions for {formatAddress(searchAddress)}</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>Hash</th>
-                  <th>From</th>
-                  <th>To</th>
-                  <th>Value</th>
-                  <th>Block</th>
-                  <th>Gas Used</th>
-                </tr>
-              </thead>
-              <tbody>
-                {addressTransactions.slice(0, 10).map((tx) => (
-                  <tr key={tx.hash}>
-                    <td className="hash">{formatAddress(tx.hash)}</td>
-                    <td className="address">{formatAddress(tx.from)}</td>
-                    <td className="address">{formatAddress(tx.to)}</td>
-                    <td className="value">{formatValue(tx.value)}</td>
-                    <td className="block">{tx.blockNumber}</td>
-                    <td className="gas">{tx.gasUsed?.toLocaleString() || 'N/A'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Recent Blocks Section */}
-      <div className="blocks-section">
-        <h2>Recent Blocks</h2>
-        <div className="blocks-grid">
-          {recentBlocks.map((block) => (
-            <div key={block.number} className="block-card">
-              <div className="block-number">#{block.number}</div>
-              <div className="block-info">
-                <div>Hash: {formatAddress(block.hash)}</div>
-                <div>Txs: {block.transaction_count}</div>
-                <div>Gas: {block.gas_utilization.toFixed(1)}%</div>
-                <div>Size: {(block.size / 1024).toFixed(1)}KB</div>
+        {/* Metrics Dashboard */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <Card className="border-l-4 border-l-blue-500">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Block Height
+              </CardTitle>
+              <Database className="h-4 w-4 text-blue-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-foreground">
+                {metrics.block_height?.toLocaleString() || '0'}
               </div>
-            </div>
-          ))}
+              <p className="text-xs text-muted-foreground mt-1">
+                Current block number
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-l-4 border-l-green-500">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Transactions/Sec
+              </CardTitle>
+              <TrendingUp className="h-4 w-4 text-green-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-foreground">
+                {metrics.tps?.toFixed(2) || '0.00'}
+              </div>
+              <div className="flex items-center space-x-2 text-xs text-muted-foreground mt-1">
+                <span>10s: {metrics.tps_10s?.toFixed(1)}</span>
+                <span>30s: {metrics.tps_30s?.toFixed(1)}</span>
+                <span>60s: {metrics.tps_60s?.toFixed(1)}</span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-l-4 border-l-purple-500">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Active Validators
+              </CardTitle>
+              <Users className="h-4 w-4 text-purple-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-foreground">
+                {metrics.validators || '0'}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Network validators
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-l-4 border-l-orange-500">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Block Time
+              </CardTitle>
+              <Clock className="h-4 w-4 text-orange-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-foreground">
+                {metrics.avg_block_time?.toFixed(1) || '0.0'}s
+              </div>
+              <div className="flex items-center gap-2 mt-2">
+                <Badge
+                  variant={getActivityBadgeVariant(metrics.network_activity)}
+                  className={getActivityColor(metrics.network_activity)}
+                >
+                  <Zap className="h-3 w-3 mr-1" />
+                  {metrics.network_activity} Activity
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
         </div>
-      </div>
 
-      <div className="transaction-list">
-        <h2>Recent Transactions</h2>
+        {/* Address Search */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Search className="h-5 w-5" />
+              Address Search
+            </CardTitle>
+            <CardDescription>
+              Search for transactions by wallet address to track specific account activity
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex space-x-2">
+              <Input
+                placeholder="Enter wallet address (0x...)"
+                value={searchAddress}
+                onChange={(e) => setSearchAddress(e.target.value)}
+                className="flex-1"
+              />
+              <Button
+                onClick={searchByAddress}
+                disabled={!searchAddress.trim()}
+                className="px-6"
+              >
+                <Search className="h-4 w-4 mr-2" />
+                Search
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-        <table>
-          <thead>
-            <tr>
-              <th>Hash</th>
-              <th>From</th>
-              <th>To</th>
-              <th>Value</th>
-              <th>Block</th>
-              <th>Gas</th>
-              <th>Type</th>
-            </tr>
-          </thead>
-          <tbody>
-            {transactions.slice(0, 10).map((tx) => (
-              <tr key={tx.hash}>
-                <td className="hash">{formatAddress(tx.hash)}</td>
-                <td className="address">{formatAddress(tx.from)}</td>
-                <td className="address">{formatAddress(tx.to)}</td>
-                <td className="value">{formatValue(tx.value)}</td>
-                <td className="block">{tx.blockNumber}</td>
-                <td className="gas">{tx.gasUsed?.toLocaleString() || 'N/A'}</td>
-                <td className="type">{tx.isContract ? 'Contract' : 'Transfer'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {/* Recent Activity Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Live Transactions */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-5 w-5 text-green-500" />
+                Live Transactions
+                <Badge variant="secondary" className="ml-auto">
+                  {transactions.length}
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                Real-time transaction feed from the Monad network
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw className="h-6 w-6 animate-spin text-primary mr-3" />
+                  <span className="text-muted-foreground">Loading transactions...</span>
+                </div>
+              ) : (
+                <div className="max-h-96 overflow-auto">
+                  <table className="w-full">
+                    <thead className="sticky top-0 bg-background border-b">
+                      <tr className="text-left">
+                        <th className="pb-3 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Hash
+                        </th>
+                        <th className="pb-3 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Block
+                        </th>
+                        <th className="pb-3 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          From
+                        </th>
+                        <th className="pb-3 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          To
+                        </th>
+                        <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">
+                          Value
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {transactions.slice(0, 15).map((tx, index) => (
+                        <tr
+                          key={tx.hash}
+                          className="hover:bg-muted/50 transition-colors group"
+                        >
+                          <td className="py-3 pr-4">
+                            <div className="flex items-center gap-2">
+                              {index === 0 && (
+                                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse flex-shrink-0"></div>
+                              )}
+                              <span className="font-mono text-sm text-primary hover:text-primary/80 cursor-pointer">
+                                {formatHash(tx.hash)}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-3 pr-4">
+                            <Badge variant="outline" className="text-xs">
+                              {tx.blockNumber}
+                            </Badge>
+                          </td>
+                          <td className="py-3 pr-4">
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {formatAddress(tx.from)}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-4">
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {formatAddress(tx.to)}
+                            </span>
+                          </td>
+                          <td className="py-3 text-right">
+                            <Badge variant="secondary" className="font-mono text-xs">
+                              {formatValue(tx.value)}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-        {loading && <div className="loading">Loading transactions...</div>}
+          {/* Recent Blocks */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Database className="h-5 w-5 text-blue-500" />
+                Recent Blocks
+                <Badge variant="secondary" className="ml-auto">
+                  {recentBlocks.length}
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                Latest blocks mined on the network
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                {recentBlocks.map((block, index) => (
+                  <div
+                    key={block.number}
+                    className="group relative bg-card border rounded-lg p-4 hover:shadow-md transition-all duration-200"
+                  >
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="font-semibold text-foreground">
+                        Block #{block.number}
+                      </div>
+                      <Badge variant="outline" className="text-xs">
+                        {block.transaction_count} txs
+                      </Badge>
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Hash:</span>
+                        <span className="font-mono text-xs">{formatHash(block.hash)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Time:</span>
+                        <span className="text-xs">
+                          {new Date(block.timestamp * 1000).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    </div>
+                    {index === 0 && (
+                      <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full animate-pulse"></div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
-        {hasMore && !loading && (
-          <button className="load-more" onClick={loadMore}>
-            Load More
-          </button>
+        {/* Address Search Results */}
+        {addressTransactions.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Search className="h-5 w-5" />
+                Address Transactions
+                <Badge variant="secondary" className="ml-auto">
+                  {addressTransactions.length} results
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                Transactions for address: <span className="font-mono">{formatAddress(searchAddress)}</span>
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                {addressTransactions.map((tx) => (
+                  <div
+                    key={tx.hash}
+                    className="bg-card border rounded-lg p-4 hover:shadow-md transition-all duration-200"
+                  >
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="font-mono text-sm text-primary">
+                        {formatHash(tx.hash)}
+                      </div>
+                      <Badge variant="outline" className="text-xs">
+                        Block {tx.blockNumber}
+                      </Badge>
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">From:</span>
+                        <span className="font-mono text-xs">{formatAddress(tx.from)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">To:</span>
+                        <span className="font-mono text-xs">{formatAddress(tx.to)}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-muted-foreground">Value:</span>
+                        <Badge variant="secondary" className="font-mono">
+                          {formatValue(tx.value)}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         )}
 
-        {!hasMore && transactions.length > 0 && (
-          <div className="end-message">No more transactions to load</div>
-        )}
-
-        {!loading && transactions.length === 0 && !error && (
-          <div className="empty-message">No transactions found</div>
+        {/* Error Display */}
+        {error && (
+          <Card className="border-destructive">
+            <CardContent className="pt-6">
+              <div className="text-center space-y-3">
+                <div className="text-destructive font-medium">
+                  ⚠️ Connection Error
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {error}
+                </p>
+                <Button
+                  variant="outline"
+                  onClick={() => window.location.reload()}
+                  className="mt-4"
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Retry Connection
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         )}
       </div>
     </div>
