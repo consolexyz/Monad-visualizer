@@ -34,7 +34,9 @@ current_metrics = {
     'tps': 0,
     'block_height': 0,
     'validators': 0,  # This will be estimated or fetched if available
-    'avg_block_time': 0
+    'avg_block_time': 0,
+    'avg_gas_price': 0,  # Average gas price in wei
+    'avg_gas_price_gwei': 0  # Average gas price in gwei
 }
 
 # Initialize the client
@@ -83,8 +85,10 @@ async def update_transaction_cache():
         latest_block_number = await client.get_height()
         
         # Enhanced query with optimized field selection and advanced features
+        # Increase block range to capture more transactions per update
+        blocks_to_fetch = 20  # Increased from 10 to get more transactions
         query = hypersync.Query(
-            from_block=max(0, latest_block_number - 10),  # Get last 10 blocks for better context
+            from_block=max(0, latest_block_number - blocks_to_fetch),  # Get last 20 blocks for better context
             to_block=latest_block_number + 1,  # Exclusive end block
             blocks=[{}],  # Include all blocks in range
             transactions=[{}],  # Include all transactions
@@ -117,8 +121,8 @@ async def update_transaction_cache():
                     BlockField.SIZE,
                 ]
             ),
-            max_num_transactions=1000,  # Limit for performance
-            max_num_blocks=20
+            max_num_transactions=2000,  # Increased limit to handle more transactions per block
+            max_num_blocks=30  # Increased to match our block range
         )
         
         # Fetch the data
@@ -221,13 +225,16 @@ def update_cache_sync():
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
     from_block = int(request.args.get('fromBlock', 0))
+    to_block = request.args.get('toBlock')  # New parameter for block range
     limit = request.args.get('limit')
+    get_all_from_block = request.args.get('getAllFromBlock', 'false').lower() == 'true'  # New parameter
     
     # If no limit provided, default to 10
     # If limit is 'all', return all transactions (with a safety max)
+    # If getAllFromBlock is true, get all transactions from the specified block onwards
     if limit is None:
-        limit = 10
-    elif limit == 'all':
+        limit = 10 if not get_all_from_block else 1000
+    elif limit == 'all' or get_all_from_block:
         limit = 1000  # Safety maximum to prevent server overload
     else:
         limit = int(limit)
@@ -237,11 +244,22 @@ def get_transactions():
     # Update cache before serving
     update_cache_sync()
     
-    # Filter transactions
-    filtered_txs = [tx for tx in transaction_cache if tx['blockNumber'] >= from_block]
+    # Filter transactions by block range
+    if to_block is not None:
+        to_block = int(to_block)
+        filtered_txs = [
+            tx for tx in transaction_cache 
+            if from_block <= tx['blockNumber'] <= to_block
+        ]
+    else:
+        filtered_txs = [tx for tx in transaction_cache if tx['blockNumber'] >= from_block]
     
-    # Pagination
-    paginated_txs = filtered_txs[:limit]
+    # If getAllFromBlock is true, return all transactions from the specified block
+    if get_all_from_block:
+        paginated_txs = filtered_txs
+    else:
+        # Normal pagination
+        paginated_txs = filtered_txs[:limit]
     
     # Calculate next block
     next_block = from_block
@@ -254,7 +272,14 @@ def get_transactions():
             'transactions': paginated_txs,
             'pagination': {
                 'nextBlock': next_block,
-                'hasMore': len(filtered_txs) > limit
+                'hasMore': len(filtered_txs) > len(paginated_txs),
+                'totalFound': len(filtered_txs),
+                'returned': len(paginated_txs)
+            },
+            'query_info': {
+                'fromBlock': from_block,
+                'toBlock': to_block,
+                'getAllFromBlock': get_all_from_block
             }
         }
     })
@@ -355,6 +380,16 @@ def calculate_metrics():
         # In a real scenario, you'd query the network for validator set
         estimated_validators = 100  # Placeholder - Monad testnet typically has around this many
         
+        # Calculate average gas price from recent transactions
+        gas_prices = []
+        for tx in recent_60s:  # Use last 60 seconds of transactions
+            gas_price = tx.get('gasPrice', 0)
+            if gas_price and gas_price > 0:
+                gas_prices.append(gas_price)
+        
+        avg_gas_price = sum(gas_prices) / len(gas_prices) if gas_prices else 0
+        avg_gas_price_gwei = avg_gas_price / 1e9 if avg_gas_price > 0 else 0  # Convert wei to gwei
+        
         current_metrics.update({
             'tps': round(tps, 2),
             'tps_10s': round(tps_10s, 2),
@@ -364,6 +399,8 @@ def calculate_metrics():
             'block_height': latest_block,
             'validators': estimated_validators,
             'avg_block_time': round(avg_block_time, 2),
+            'avg_gas_price': round(avg_gas_price, 0),  # Gas price in wei
+            'avg_gas_price_gwei': round(avg_gas_price_gwei, 2),  # Gas price in gwei
             'network_activity': 'High' if tps > 5 else 'Medium' if tps > 1 else 'Low'
         })
         
@@ -604,11 +641,67 @@ def advanced_transaction_search():
             'message': str(e)
         }), 500
 
+@app.route('/api/transactions/latest', methods=['GET'])
+def get_latest_transactions():
+    """Get all transactions from the latest blocks"""
+    try:
+        # Parameters
+        num_blocks = int(request.args.get('blocks', 3))  # Default to last 3 blocks
+        num_blocks = min(num_blocks, 10)  # Safety limit
+        
+        # Update cache before serving
+        update_cache_sync()
+        
+        if not transaction_cache:
+            return jsonify({
+                'status': 'success',
+                'data': {
+                    'transactions': [],
+                    'blocks_scanned': 0,
+                    'latest_block': 0
+                }
+            })
+        
+        # Get the latest block number from our cache
+        latest_block = max(tx['blockNumber'] for tx in transaction_cache)
+        from_block = max(0, latest_block - num_blocks + 1)
+        
+        # Filter transactions from the latest blocks
+        latest_txs = [
+            tx for tx in transaction_cache 
+            if tx['blockNumber'] >= from_block
+        ]
+        
+        # Sort by block number (newest first), then by transaction index
+        latest_txs = sorted(
+            latest_txs, 
+            key=lambda x: (x['blockNumber'], x.get('transactionIndex', 0)), 
+            reverse=True
+        )
+        
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'transactions': latest_txs,
+                'blocks_scanned': num_blocks,
+                'latest_block': latest_block,
+                'from_block': from_block,
+                'total_transactions': len(latest_txs)
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
 if __name__ == '__main__':
     print("Starting Enhanced Monad Tracker API server on http://localhost:3001")
     print("API endpoints:")
     print("  - GET /api/init (call this first)")
-    print("  - GET /api/transactions?fromBlock=0&limit=10")
+    print("  - GET /api/transactions?fromBlock=0&limit=10&getAllFromBlock=true")
+    print("  - GET /api/transactions/latest?blocks=3 (get all transactions from latest blocks)")
     print("  - GET /api/transactions/by-address/<address>?limit=50")
     print("  - GET /api/transactions/large-value?min_value=1000000000000000000&limit=20")
     print("  - GET /api/blocks/recent?limit=10")
