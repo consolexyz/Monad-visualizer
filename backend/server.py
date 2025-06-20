@@ -32,11 +32,17 @@ block_cache = []  # Store recent blocks for TPS calculation
 last_metrics_update = 0
 current_metrics = {
     'tps': 0,
+    'tps_10s': 0,
+    'tps_30s': 0,
+    'tps_60s': 0,
+    'tps_5min': 0,
+    'blocks_per_minute': 0,
     'block_height': 0,
     'validators': 0,  # This will be estimated or fetched if available
     'avg_block_time': 0,
     'avg_gas_price': 0,  # Average gas price in wei
-    'avg_gas_price_gwei': 0  # Average gas price in gwei
+    'avg_gas_price_gwei': 0,  # Average gas price in gwei
+    'network_activity': 'Low'
 }
 
 # Initialize the client
@@ -130,6 +136,7 @@ async def update_transaction_cache():
         
         # Process blocks for metrics with enhanced data
         new_blocks = []
+        block_timestamp_map = {}  # Create a map for quick timestamp lookup
         for block in res.data.blocks:
             block_number = int(block.number, 16) if isinstance(block.number, str) else block.number
             timestamp = int(block.timestamp, 16) if isinstance(block.timestamp, str) else block.timestamp
@@ -138,6 +145,9 @@ async def update_transaction_cache():
             base_fee = int(block.base_fee_per_gas, 16) if hasattr(block, 'base_fee_per_gas') and isinstance(block.base_fee_per_gas, str) else getattr(block, 'base_fee_per_gas', 0)
             difficulty = int(block.difficulty, 16) if hasattr(block, 'difficulty') and isinstance(block.difficulty, str) else getattr(block, 'difficulty', 0)
             size = int(block.size, 16) if hasattr(block, 'size') and isinstance(block.size, str) else getattr(block, 'size', 0)
+            
+            # Store timestamp for quick lookup
+            block_timestamp_map[block_number] = timestamp
             
             block_info = {
                 'number': block_number,
@@ -167,12 +177,18 @@ async def update_transaction_cache():
         for tx in res.data.transactions:
             tx_block_number = int(tx.block_number, 16) if isinstance(tx.block_number, str) else tx.block_number
             
-            # Find the corresponding block for timestamp
-            block_timestamp = time.time()  # Default to current time
-            for block in block_cache:
-                if block['number'] == tx_block_number:
-                    block_timestamp = block['timestamp']
-                    break
+            # Find the corresponding block timestamp from current response or cache
+            block_timestamp = block_timestamp_map.get(tx_block_number)
+            if block_timestamp is None:
+                # Fallback to cache if not in current response
+                for block in block_cache:
+                    if block['number'] == tx_block_number:
+                        block_timestamp = block['timestamp']
+                        break
+                else:
+                    # If still not found, use current time as last resort
+                    block_timestamp = time.time()
+                    print(f"Warning: Could not find timestamp for block {tx_block_number}, using current time")
             
             # Enhanced transaction data with more fields
             gas_used = int(tx.gas_used, 16) if hasattr(tx, 'gas_used') and isinstance(tx.gas_used, str) else getattr(tx, 'gas_used', 0)
@@ -303,7 +319,7 @@ def get_status():
         return jsonify({
             'status': 'error',
             'message': str(e)
-        }), 500
+        }, 500)
 
 @app.route('/api/latest-transaction', methods=['GET'])
 def get_latest_transaction():
@@ -333,28 +349,18 @@ def calculate_metrics():
     global current_metrics, block_cache, transaction_cache
     
     try:
+        # Use the new HyperSync-based TPS calculation (now with 100 blocks)
+        tps_data = run_async(calculate_tps_from_hypersync())
+        tps = tps_data['tps']
+        tps_10s = tps_data['tps_10s'] 
+        tps_30s = tps_data['tps_30s']
+        tps_60s = tps_data['tps_60s']
+        tps_5min = tps_data['tps_5min']
+        
+        print(f"Updated TPS calculation (100 blocks) - Final: {tps:.2f}")
+        print(f"  10s: {tps_10s:.2f}, 30s: {tps_30s:.2f}, 60s: {tps_60s:.2f}, 5min: {tps_5min:.2f}")
+        
         current_time = time.time()
-        
-        # Enhanced real-time TPS calculation with multiple timeframes
-        # Calculate TPS for last 10 seconds (most real-time)
-        recent_10s = [tx for tx in transaction_cache if tx.get('timestamp', 0) > current_time - 10]
-        tps_10s = len(recent_10s) / 10 if recent_10s else 0
-        
-        # Calculate TPS for last 30 seconds (medium-term)
-        recent_30s = [tx for tx in transaction_cache if tx.get('timestamp', 0) > current_time - 30]
-        tps_30s = len(recent_30s) / 30 if recent_30s else 0
-        
-        # Calculate TPS for last 60 seconds (long-term)
-        recent_60s = [tx for tx in transaction_cache if tx.get('timestamp', 0) > current_time - 60]
-        tps_60s = len(recent_60s) / 60 if recent_60s else 0
-        
-        # Use weighted average favoring recent activity
-        if tps_10s > 0:
-            tps = tps_10s * 0.6 + tps_30s * 0.3 + tps_60s * 0.1
-        elif tps_30s > 0:
-            tps = tps_30s * 0.7 + tps_60s * 0.3
-        else:
-            tps = tps_60s
         
         # Calculate block production rate (blocks per minute)
         recent_blocks = [block for block in block_cache if block.get('timestamp', 0) > current_time - 300]  # Last 5 minutes
@@ -380,9 +386,9 @@ def calculate_metrics():
         # In a real scenario, you'd query the network for validator set
         estimated_validators = 100  # Placeholder - Monad testnet typically has around this many
         
-        # Calculate average gas price from recent transactions
+        # Calculate average gas price from recent transactions (use transaction cache)
         gas_prices = []
-        for tx in recent_60s:  # Use last 60 seconds of transactions
+        for tx in transaction_cache[:50]:  # Use recent transactions from cache
             gas_price = tx.get('gasPrice', 0)
             if gas_price and gas_price > 0:
                 gas_prices.append(gas_price)
@@ -395,6 +401,7 @@ def calculate_metrics():
             'tps_10s': round(tps_10s, 2),
             'tps_30s': round(tps_30s, 2),
             'tps_60s': round(tps_60s, 2),
+            'tps_5min': round(tps_5min, 2),
             'blocks_per_minute': round(blocks_per_minute, 2),
             'block_height': latest_block,
             'validators': estimated_validators,
@@ -474,7 +481,7 @@ def get_transactions_by_address(address):
 def get_large_value_transactions():
     """Get transactions with value above a threshold"""
     try:
-        # Default to 1 ETH equivalent (in wei)
+        # Default to 1 MON equivalent (in wei)
         min_value = int(request.args.get('min_value', str(10**18)))
         limit = int(request.args.get('limit', 20))
         limit = min(limit, 100)  # Safety limit
@@ -696,28 +703,143 @@ def get_latest_transactions():
             'message': str(e)
         }), 500
 
+async def calculate_tps_from_hypersync():
+    """
+    Calculate TPS directly from HyperSync using block-based approach
+    This is more accurate and efficient than tracking individual transactions
+    """
+    try:
+        # Get current block height
+        latest_block_number = await client.get_height()
+        
+        # Query blocks from the last 100 blocks for TPS calculation
+        # This gives us enough data for 10s, 30s, 60s intervals and even longer periods
+        blocks_for_tps = 100  # Use last 100 blocks for comprehensive TPS calculation
+        
+        query = hypersync.Query(
+            from_block=max(0, latest_block_number - blocks_for_tps),
+            to_block=latest_block_number + 1,
+            blocks=[{}],  # Get all blocks
+            transactions=[{}],  # Also get transactions to count them per block
+            field_selection=hypersync.FieldSelection(
+                block=[
+                    BlockField.NUMBER,
+                    BlockField.TIMESTAMP,
+                ],
+                transaction=[
+                    TransactionField.BLOCK_NUMBER,
+                ]
+            ),
+            max_num_blocks=blocks_for_tps + 10,
+            max_num_transactions=10000  # Increased limit for 100 blocks
+        )
+        
+        res = await client.get(query)
+        current_time = time.time()
+        
+        # Count transactions per block
+        tx_count_per_block = {}
+        for tx in res.data.transactions:
+            block_num = int(tx.block_number, 16) if isinstance(tx.block_number, str) else tx.block_number
+            tx_count_per_block[block_num] = tx_count_per_block.get(block_num, 0) + 1
+        
+        # Process blocks for TPS calculation
+        tps_blocks = []
+        for block in res.data.blocks:
+            block_number = int(block.number, 16) if isinstance(block.number, str) else block.number
+            timestamp = int(block.timestamp, 16) if isinstance(block.timestamp, str) else block.timestamp
+            tx_count = tx_count_per_block.get(block_number, 0)
+            
+            tps_blocks.append({
+                'number': block_number,
+                'timestamp': timestamp,
+                'transaction_count': tx_count
+            })
+        
+        # Sort by timestamp (newest first)
+        tps_blocks.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        def calculate_interval_tps(seconds):
+            cutoff_time = current_time - seconds
+            recent_blocks = [b for b in tps_blocks if b['timestamp'] > cutoff_time]
+            
+            if len(recent_blocks) < 2:
+                return 0
+            
+            # Calculate actual time span
+            oldest_block = min(recent_blocks, key=lambda x: x['timestamp'])
+            newest_block = max(recent_blocks, key=lambda x: x['timestamp'])
+            time_span = newest_block['timestamp'] - oldest_block['timestamp']
+            
+            if time_span <= 0:
+                return 0
+            
+            total_transactions = sum(block['transaction_count'] for block in recent_blocks)
+            return total_transactions / time_span
+        
+        # Calculate TPS for different intervals
+        tps_10s = calculate_interval_tps(10)
+        tps_30s = calculate_interval_tps(30)
+        tps_60s = calculate_interval_tps(60)
+        tps_5min = calculate_interval_tps(300)  # 5 minutes for longer-term average
+        
+        # Weighted average - now includes 5-minute data for more stability
+        if tps_10s > 0:
+            final_tps = tps_10s * 0.5 + tps_30s * 0.25 + tps_60s * 0.15 + tps_5min * 0.1
+        elif tps_30s > 0:
+            final_tps = tps_30s * 0.6 + tps_60s * 0.25 + tps_5min * 0.15
+        elif tps_60s > 0:
+            final_tps = tps_60s * 0.7 + tps_5min * 0.3
+        else:
+            final_tps = tps_5min
+        
+        print(f"HyperSync TPS - Blocks analyzed: {len(tps_blocks)} (last 100 blocks)")
+        print(f"HyperSync TPS - 10s: {tps_10s:.2f}, 30s: {tps_30s:.2f}, 60s: {tps_60s:.2f}, 5min: {tps_5min:.2f}")
+        print(f"HyperSync TPS - Final weighted: {final_tps:.2f}")
+        
+        if len(tps_blocks) >= 2:
+            time_span_total = tps_blocks[0]['timestamp'] - tps_blocks[-1]['timestamp']
+            total_tx = sum(block['transaction_count'] for block in tps_blocks)
+            print(f"HyperSync TPS - Total time span: {time_span_total:.1f}s, Total transactions: {total_tx}")
+        
+        return {
+            'tps': round(final_tps, 2),
+            'tps_10s': round(tps_10s, 2),
+            'tps_30s': round(tps_30s, 2),
+            'tps_60s': round(tps_60s, 2),
+            'tps_5min': round(tps_5min, 2)
+        }
+        
+    except Exception as e:
+        print(f"Error calculating TPS from HyperSync: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'tps': 0,
+            'tps_10s': 0,
+            'tps_30s': 0,
+            'tps_60s': 0,
+            'tps_5min': 0
+        }
+
 if __name__ == '__main__':
-    print("Starting Enhanced Monad Tracker API server on http://localhost:3001")
-    print("API endpoints:")
-    print("  - GET /api/init (call this first)")
-    print("  - GET /api/transactions?fromBlock=0&limit=10&getAllFromBlock=true")
-    print("  - GET /api/transactions/latest?blocks=3 (get all transactions from latest blocks)")
-    print("  - GET /api/transactions/by-address/<address>?limit=50")
-    print("  - GET /api/transactions/large-value?min_value=1000000000000000000&limit=20")
-    print("  - GET /api/blocks/recent?limit=10")
-    print("  - POST /api/search/advanced (JSON body with search parameters)")
-    print("  - GET /api/metrics (blockchain statistics)")
-    print("  - GET /api/status")
-    print("  - GET /api/latest-transaction")
-    print("\nAdvanced Features:")
-    print("  - Enhanced block data with gas utilization, difficulty, size")
-    print("  - Transaction filtering by address, value, and other criteria")
-    print("  - Optimized HyperSync queries with proper field selection")
-    print("  - Additional network metrics and statistics")
+    print("Starting Monad Visualizer Backend Server...")
+    print("Server will be available at http://localhost:3001")
+    print("Available endpoints:")
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith('/api/'):
+            print(f"  {rule.rule}")
+    print("=" * 50)
     
-    # Initialize client on startup
-    initialize_client()
-    
-    # Run with Flask's built-in server
-    port = int(os.environ.get("PORT", 3001))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    try:
+        # Initialize the cache on startup
+        print("Initializing transaction cache...")
+        update_cache_sync()
+        print("Cache initialized successfully!")
+        
+        # Start the Flask server
+        app.run(host='0.0.0.0', port=3001, debug=True)
+    except Exception as e:
+        print(f"Error starting server: {e}")
+        import traceback
+        traceback.print_exc()
