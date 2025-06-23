@@ -373,19 +373,19 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto p-6">
+      <main className="max-w-7xl mx-auto p-3 sm:p-6">
         <Tabs defaultValue="overview" className="space-y-6">
-          {/* Tab Navigation */}
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="overview" className="flex items-center gap-2">
+          {/* Tab Navigation - Mobile Friendly */}
+          <TabsList className="grid w-full grid-cols-3 h-auto">
+            <TabsTrigger value="overview" className="flex items-center gap-1 px-2 py-3 text-xs sm:text-sm">
               <BarChart3 className="h-4 w-4" />
-              Network Overview
+              <span className="hidden sm:inline">Network </span>Overview
             </TabsTrigger>
-            <TabsTrigger value="transactions" className="flex items-center gap-2">
+            <TabsTrigger value="transactions" className="flex items-center gap-1 px-2 py-3 text-xs sm:text-sm">
               <Activity className="h-4 w-4" />
-              Live Transactions
+              <span className="hidden sm:inline">Live </span>Transactions
             </TabsTrigger>
-            <TabsTrigger value="visualizer" className="flex items-center gap-2">
+            <TabsTrigger value="visualizer" className="flex items-center gap-1 px-2 py-3 text-xs sm:text-sm">
               <Sparkles className="h-4 w-4" />
               Visualizer
             </TabsTrigger>

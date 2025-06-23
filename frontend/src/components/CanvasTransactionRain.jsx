@@ -260,15 +260,32 @@ const CanvasTransactionRain = ({ transactions = [], isActive = true }) => {
                 const molandakY = canvas.height - molandakHeight + 5; // Push down 5 pixels to ensure no gap
                 const molandakX = personPositionRef.current;
 
-                // Draw Molandak
+                // Draw Molandak with direction flipping
                 ctx.globalAlpha = 0.9;
-                ctx.drawImage(
-                    customImageRef.current,
-                    molandakX,
-                    molandakY,
-                    molandakWidth,
-                    molandakHeight
-                );
+                ctx.save();
+
+                // Flip horizontally when moving left
+                if (personDirectionRef.current === -1) {
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(
+                        customImageRef.current,
+                        -(molandakX + molandakWidth), // Adjust X position for flipped image
+                        molandakY,
+                        molandakWidth,
+                        molandakHeight
+                    );
+                } else {
+                    // Normal drawing when moving right
+                    ctx.drawImage(
+                        customImageRef.current,
+                        molandakX,
+                        molandakY,
+                        molandakWidth,
+                        molandakHeight
+                    );
+                }
+
+                ctx.restore();
             }
 
             ctx.globalAlpha = 1;
